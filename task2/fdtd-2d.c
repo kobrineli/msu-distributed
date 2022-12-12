@@ -10,7 +10,7 @@
 
 #include "fdtd-2d.h"
 
-#define HELPERS 2
+#define HELPERS 3
 
 int rest_helpers = HELPERS;
 
@@ -30,6 +30,7 @@ int nrow;
 int t;
 
 int killed = 0;
+int dumped = 0;
 
 static
 double rtclock()
@@ -197,11 +198,16 @@ void error_handler(MPI_Comm *comm, int *err, ...)
         init_array (TMAX, NX, NY,
             _fict_);
 
-        load();
+        if (dumped) {
+            load();
+        }
     }
 
-    load_iter();
-    //printf("handle iter %d\n", t);
+    if (dumped) {
+        load_iter();
+    } else {
+        t = 0;
+    }
 
     MPI_Barrier(comm_world);
 }
@@ -220,16 +226,16 @@ void kernel_fdtd_2d()
             if (!rank)
             {
                 for (j = 0; j < NY; j++)
-                    *(ey + j) = _fict_[t];
+                    ey[j] = _fict_[t];
 
                 for (i = 1; i < nrow; i++)
                     for (j = 0; j < NY; j++)
                     {
-                        *(ey + i * NY + j) = *(ey + i * NY + j) - 0.5f * (*(hz + i * NY + j) - *(hz + (i - 1) * NY + j));
+                        ey[i * NY + j] = ey[i * NY + j] - 0.5f * (hz[i * NY + j] - hz[(i - 1) * NY + j]);
                     }
 
                 if (rank != ranksize - rest_helpers - 1)
-                    MPI_Isend((hz + (nrow - 1) * NY), NY, MPI_FLOAT, rank + 1, t,
+                    MPI_Isend(&hz[(nrow - 1) * NY], NY, MPI_FLOAT, rank + 1, t,
                             comm_world, &req[0]);
             }
 
@@ -255,17 +261,17 @@ void kernel_fdtd_2d()
                     {
                         if (i == 0)
                         {
-                            *(ey + i * NY + j) = *(ey + i * NY + j) - 0.5f * (*(hz + i * NY + j) - temp[j]);
+                            ey[i * NY + j] = ey[i * NY + j] - 0.5f * (hz[i * NY + j] - temp[j]);
                         }
                         else
-                            *(ey + i * NY + j) = *(ey + i * NY + j) - 0.5f * (*(hz + i * NY + j) - *(hz + (i - 1) * NY + j));
+                            ey[i * NY + j] = ey[i * NY + j] - 0.5f * (hz[i * NY + j] - hz[(i - 1) * NY + j]);
 
                     }
                 }
             }
             for (i = 0; i < nrow; i++)
                 for (j = 1; j < NY; j++)
-                    *(ex + i * NY + j) = *(ex + i * NY + j) - 0.5f * (*(hz + i * NY + j) - *(hz + i * NY + j - 1));
+                    ex[i * NY + j] = ex[i * NY + j] - 0.5f * (hz[i * NY + j] - hz[i * NY + j - 1]);
 
             if (rank != ranksize - rest_helpers - 1)
             {
@@ -301,11 +307,11 @@ void kernel_fdtd_2d()
                 for (j = 0; j < NY - 1; j++)
                 {
                     if (i == nrow - 1)
-                        *(hz + i * NY + j) = *(hz + i * NY + j) - 0.7f * (*(ex + i * NY + j + 1) - *(ex + i * NY + j) +
-                                temp[j] - *(ey + i * NY + j));
+                        hz[i * NY + j] = hz[i * NY + j] - 0.7f * (ex[i * NY + j + 1] - ex[i * NY + j] +
+                                temp[j] - ey[i * NY + j]);
                     else
-                        *(hz + i * NY + j) = *(hz + i * NY + j) - 0.7f * (*(ex + i * NY + j + 1) - *(ex + i * NY + j) +
-                                *(ey + (i + 1) * NY + j) - *(ey + i * NY + j));
+                        hz[i * NY + j] = hz[i * NY + j] - 0.7f * (ex[i * NY + j + 1] - ex[i * NY + j] +
+                                ey[(i + 1) * NY + j] - ey[i * NY + j]);
                 }
             }
 
@@ -321,7 +327,11 @@ void kernel_fdtd_2d()
             }
         }
 
-        if (t > 5 && rank == ranksize - rest_helpers - 1 && rest_helpers) {
+        if (t >= 5) {
+            dumped = 1;
+        }
+
+        if (t > 5 * (HELPERS - rest_helpers + 1) && rank == ranksize - rest_helpers - 1 && rest_helpers) {
             printf("R.I.P. %d\n", rank);
             printf("killed on iter %d\n", t);
             raise(SIGKILL);
